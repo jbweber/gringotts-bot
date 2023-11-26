@@ -21,51 +21,34 @@ type Item struct {
 	Count int
 }
 
-func (g *Gringotts) FindItem(ctx context.Context, searchString string) (*Item, error) {
-	query := fmt.Sprintf(`SELECT id, name FROM item WHERE name LIKE '%%%s%%'`, searchString)
-	r := g.db.QueryRowContext(ctx, query)
+func (g *Gringotts) FindItem(ctx context.Context, searchString string) ([]*Item, error) {
+	query := fmt.Sprintf(`
+		SELECT i.id, i.name, SUM(ic.item_count) as item_total FROM item i
+		LEFT JOIN item_count ic
+		ON i.id = ic.item_id
+		WHERE i.name LIKE '%%%s%%'
+		GROUP BY i.name
+		`, searchString,
+	)
 
-	var itemID string
-	var itemName string
-	err := r.Scan(&itemID, &itemName)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			// TODO handle this with a sentinal?
-		}
-		return nil, fmt.Errorf("FindItem: failed to search for item ID: %w", err)
-	}
-
-	stmt, err := g.db.PrepareContext(ctx, `SELECT item_count FROM item_count WHERE item_id = ?`)
-	if err != nil {
-		return nil, fmt.Errorf("FindItem: failed to prepare item_count query: %w", err)
-	}
-
-	defer func() { _ = stmt.Close() }()
-
-	rows, err := stmt.QueryContext(ctx, itemID)
+	r, err := g.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 
-	defer func() { _ = rows.Close() }()
+	defer func() { _ = r.Close() }()
 
-	total := 0
-
-	for rows.Next() {
-		var count int
-		err := rows.Scan(&count)
-		if err != nil {
+	var items []*Item
+	for r.Next() {
+		i := &Item{}
+		if err := r.Scan(&i.ID, &i.Name, &i.Count); err != nil {
 			return nil, err
 		}
 
-		total += count
+		items = append(items, i)
 	}
 
-	return &Item{
-		ID:    itemID,
-		Name:  itemName,
-		Count: total,
-	}, nil
+	return items, nil
 }
 
 func (g *Gringotts) GetItemCount(ctx context.Context, owner string, itemID int) (int, error) {
